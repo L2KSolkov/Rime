@@ -52,10 +52,10 @@ public class CasBundleManifestBuilder
     }
 
     /// <summary>The bytes in the codec blocks a compressed cas payload is stored in.</summary>
-    private static byte[] Encode(byte[] p_Raw)
+    private static byte[] Encode(byte[] p_Raw, CodecMethod p_Method = CodecMethod.Zlib)
     {
         var s_Stream = new MemoryStream();
-        using (var s_Writer = new CodecRimeWriter(s_Stream, CodecSettings.Zlib))
+        using (var s_Writer = new CodecRimeWriter(s_Stream, new CodecSettings { Method = p_Method }))
             s_Writer.Write(p_Raw);
         return s_Stream.ToArray();
     }
@@ -166,9 +166,13 @@ public class CasBundleManifestBuilder
             };
         }
 
-        // A chunk says it is compressed only through the flag in its guid.
+        // Always codec blocks; the guid's compression flag (data4[7] & 1) picks which. Unflagged chunks are
+        // uncompressed 0x10000-byte segments, each behind an 8-byte header: the loader addresses them by a fixed
+        // 0x10008 stride (bf4_server_Final 0x1407ff2a7: test [guid+0Fh], 1 / imul 10008h)
+        // and the game's own copies are so (73ddcc80-...-58ac: 0x17748 bytes as two "none" blocks, 0x17758 stored).
+        // Raw bytes are read as block headers, putting every chunk after them out of step.
         var s_Raw = ReadAll(p_Object);
-        var s_Stored = p_Id.HasCompressionFlag() ? Encode(s_Raw) : s_Raw;
+        var s_Stored = Encode(s_Raw, p_Id.HasCompressionFlag() ? CodecMethod.Zlib : CodecMethod.None);
         Count(s_Stored);
         return new CasBundle.Chunk
         {
