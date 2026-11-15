@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using RimeLib.Content.Building;
@@ -52,10 +53,10 @@ public class CasBundleManifestBuilder
     }
 
     /// <summary>The bytes in the codec blocks a compressed cas payload is stored in.</summary>
-    private static byte[] Encode(byte[] p_Raw)
+    private static byte[] Encode(byte[] p_Raw, CodecMethod p_Method = CodecMethod.Zlib)
     {
         var s_Stream = new MemoryStream();
-        using (var s_Writer = new CodecRimeWriter(s_Stream, CodecSettings.Zlib))
+        using (var s_Writer = new CodecRimeWriter(s_Stream, new CodecSettings { Method = p_Method }))
             s_Writer.Write(p_Raw);
         return s_Stream.ToArray();
     }
@@ -69,7 +70,7 @@ public class CasBundleManifestBuilder
             ResourceEntries = m_Descriptor.Resources.Select(p_R => Resource(p_R.Key, p_R.Value)).ToArray(),
             // A bundle without chunks has neither list.
             ChunkEntries = m_Descriptor.Chunks.Count == 0 ? null : m_Descriptor.Chunks.Select(p_C => Chunk(p_C.Key, p_C.Value)).ToArray(),
-            ChunkMeta = m_Descriptor.Chunks.Count == 0 ? null : m_Descriptor.Chunks.Select(p_C => ChunkMeta(p_C.Value)).ToArray(),
+            ChunkMeta = m_Descriptor.Chunks.Count == 0 ? null : UniqueTextureMeta(m_Descriptor.Chunks.Select(p_C => ChunkMeta(p_C.Value))).ToArray(),
         };
 
         // The bytes the bundle reads from cas: dbxTotalSize those of its resources and chunks (a
@@ -166,9 +167,13 @@ public class CasBundleManifestBuilder
             };
         }
 
-        // A chunk says it is compressed only through the flag in its guid.
+        // Always codec blocks; the guid's compression flag (data4[7] & 1) picks which. Unflagged chunks are
+        // uncompressed 0x10000-byte segments, each behind an 8-byte header: the loader addresses them by a fixed
+        // 0x10008 stride (bf4_server_Final 0x1407ff2a7: test [guid+0Fh], 1 / imul 10008h)
+        // and the game's own copies are so (73ddcc80-...-58ac: 0x17748 bytes as two "none" blocks, 0x17758 stored).
+        // Raw bytes are read as block headers, putting every chunk after them out of step.
         var s_Raw = ReadAll(p_Object);
-        var s_Stored = p_Id.HasCompressionFlag() ? Encode(s_Raw) : s_Raw;
+        var s_Stored = Encode(s_Raw, p_Id.HasCompressionFlag() ? CodecMethod.Zlib : CodecMethod.None);
         Count(s_Stored);
         return new CasBundle.Chunk
         {
@@ -179,6 +184,25 @@ public class CasBundleManifestBuilder
             LogicalSize = (uint)s_Raw.Length,
             InlineData = s_Stored,
         };
+    }
+
+    /// <summary>
+    /// A bundle's chunk meta is not a list parallel to its chunks: the game sorts it and looks entries up by
+    /// name hash (h32). A texture finds its firstMip there, and stops with "Texture ... appears more than once"
+    /// when its hash is there twice - two chunks reached for one texture, e.g. through a mesh's variation entries
+    /// and through the texture itself. The first texture entry for a hash is kept; a later one keeps its slot,
+    /// unnamed.
+    /// </summary>
+    private static IEnumerable<ChunkEntry.ChunkMetaEntry> UniqueTextureMeta(IEnumerable<ChunkEntry.ChunkMetaEntry> p_Meta)
+    {
+        var s_Seen = new HashSet<int>();
+        foreach (var s_Entry in p_Meta)
+        {
+            if (s_Entry.Payload?.FirstMip != null && s_Entry.AssetNameHash != 0 && !s_Seen.Add(s_Entry.AssetNameHash))
+                yield return new ChunkEntry.ChunkMetaEntry { AssetNameHash = 0 };
+            else
+                yield return s_Entry;
+        }
     }
 
     private static ChunkEntry.ChunkMetaEntry ChunkMeta(IChunkObject p_Object)
