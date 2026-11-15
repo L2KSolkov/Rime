@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using LZ4;
 using RimeLib.Content.Building;
 using RimeLib.Content.Frostbite2013_2.Frostbite.Bundles;
@@ -98,6 +99,7 @@ namespace RimeLib.Content.Frostbite2013_2.Building
                 var s_ChunkMetaStart = p_Writer.Position - s_StartOffset;
                 var s_ChunkMeta = new DbObject();
                 var s_ChunkMetaArray = new DbObject();
+                var s_TextureHashes = new HashSet<int>();
 
                 foreach (var (s_GUID, s_ChunkObject) in m_Descriptor.Chunks)
                 {
@@ -116,6 +118,17 @@ namespace RimeLib.Content.Frostbite2013_2.Building
                         var s_Meta = new DbObject(); // TODO: what about firstMip?
                         s_MetaObject.AddElement(new DbObjectElement("h32", s_AssetNameHash.Value));
                         s_MetaObject.AddElement(new DbObjectElement("meta", s_Meta, false));
+                    }
+
+                    // One texture entry per name hash (see CasBundleManifestBuilder.UniqueTextureMeta).
+                    if (s_MetaObject.TryGetElement("meta", out var s_Payload) && s_Payload.Value is DbObject s_PayloadObject
+                        && s_PayloadObject.TryGetElement("firstMip", out _)
+                        && s_MetaObject.TryGetElement("h32", out var s_H32) && s_H32.Value is int s_Hash && s_Hash != 0
+                        && !s_TextureHashes.Add(s_Hash))
+                    {
+                        s_MetaObject = new DbObject();
+                        s_MetaObject.AddElement(new DbObjectElement("h32", 0));
+                        s_MetaObject.AddElement(new DbObjectElement("meta", new DbObject(), false));
                     }
 
                     s_ChunkMetaArray.AddElement(new DbObjectElement("", s_MetaObject, false));

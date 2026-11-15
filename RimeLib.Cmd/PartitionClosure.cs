@@ -419,6 +419,14 @@ namespace RimeLib.Cmd
             Enqueue(s_References, $"res {p_Name}");
         }
 
+        /// <summary>The asset a chunk was reached from: "name#Type" or "res name" -> name.</summary>
+        private static string OwnerOf(string p_Origin)
+        {
+            var s_Name = p_Origin.StartsWith("res ", StringComparison.Ordinal) ? p_Origin[4..] : p_Origin;
+            var s_Hash = s_Name.IndexOf('#');
+            return (s_Hash >= 0 ? s_Name[..s_Hash] : s_Name).ToLowerInvariant();
+        }
+
         private void ProcessChunk(GUID p_Id, string? p_AssetName, string p_Origin)
         {
             if (!m_SeenChunks.Add(p_Id))
@@ -442,14 +450,25 @@ namespace RimeLib.Cmd
             // The variant that carries the owner's name hash is the one the game's own bundle ships.
             // It is ranged to exactly the slice that resource asks for. Any other variant is a
             // different slice of the same payload and reads the wrong bytes.
+            //
+            // Without an asset name the owner is what the chunk was reached from (a sound wave, a texture). The
+            // chunk meta a bundle ships is a table keyed by name hash, not a list parallel to its chunks; rime
+            // pairs them by position, which holds in the base game's cas bundles and not in the expansions'
+            // non-cas ones (XP0-XP7), where a chunk's copy can carry another asset's hash - a sound chunk
+            // claiming a texture's, which the texture manager then finds twice and stops on. So the copy that
+            // carries the owner's hash, a cas bundle's first.
             IChunkVariant? s_Variant = null;
-            if (!string.IsNullOrEmpty(p_AssetName))
+            var s_Owner = !string.IsNullOrEmpty(p_AssetName) ? p_AssetName! : OwnerOf(p_Origin);
+            if (!string.IsNullOrEmpty(s_Owner))
             {
-                var s_Hash = (int)RimeLib.Frostbite.Utils.HashQuick(p_AssetName!);
-                s_Variant = s_Chunk.Variants.FirstOrDefault(p_V => p_V.GetAssetNameHash() == s_Hash);
+                var s_Hash = (int)RimeLib.Frostbite.Utils.HashQuick(s_Owner);
+                s_Variant = s_Chunk.Variants.FirstOrDefault(p_V => p_V.Cas && p_V.GetAssetNameHash() == s_Hash)
+                    ?? s_Chunk.Variants.FirstOrDefault(p_V => p_V.GetAssetNameHash() == s_Hash);
             }
 
-            s_Variant ??= s_Chunk.Variants.FirstOrDefault(p_V => p_V.GetAssetNameHash() != null) ?? s_Chunk.FirstVariant;
+            // Otherwise a cas bundle's copy, whose pairing is right.
+            s_Variant ??= s_Chunk.Variants.FirstOrDefault(p_V => p_V.Cas && p_V.GetAssetNameHash() != null)
+                ?? s_Chunk.Variants.FirstOrDefault(p_V => p_V.GetAssetNameHash() != null) ?? s_Chunk.FirstVariant;
 
             m_Context.AddChunk(p_Id, s_Variant);
             m_AddedChunks++;

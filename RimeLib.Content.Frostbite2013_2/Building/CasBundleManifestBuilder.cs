@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using RimeLib.Content.Building;
@@ -69,7 +70,7 @@ public class CasBundleManifestBuilder
             ResourceEntries = m_Descriptor.Resources.Select(p_R => Resource(p_R.Key, p_R.Value)).ToArray(),
             // A bundle without chunks has neither list.
             ChunkEntries = m_Descriptor.Chunks.Count == 0 ? null : m_Descriptor.Chunks.Select(p_C => Chunk(p_C.Key, p_C.Value)).ToArray(),
-            ChunkMeta = m_Descriptor.Chunks.Count == 0 ? null : m_Descriptor.Chunks.Select(p_C => ChunkMeta(p_C.Value)).ToArray(),
+            ChunkMeta = m_Descriptor.Chunks.Count == 0 ? null : UniqueTextureMeta(m_Descriptor.Chunks.Select(p_C => ChunkMeta(p_C.Value))).ToArray(),
         };
 
         // The bytes the bundle reads from cas: dbxTotalSize those of its resources and chunks (a
@@ -183,6 +184,25 @@ public class CasBundleManifestBuilder
             LogicalSize = (uint)s_Raw.Length,
             InlineData = s_Stored,
         };
+    }
+
+    /// <summary>
+    /// A bundle's chunk meta is not a list parallel to its chunks: the game sorts it and looks entries up by
+    /// name hash (h32). A texture finds its firstMip there, and stops with "Texture ... appears more than once"
+    /// when its hash is there twice - two chunks reached for one texture, e.g. through a mesh's variation entries
+    /// and through the texture itself. The first texture entry for a hash is kept; a later one keeps its slot,
+    /// unnamed.
+    /// </summary>
+    private static IEnumerable<ChunkEntry.ChunkMetaEntry> UniqueTextureMeta(IEnumerable<ChunkEntry.ChunkMetaEntry> p_Meta)
+    {
+        var s_Seen = new HashSet<int>();
+        foreach (var s_Entry in p_Meta)
+        {
+            if (s_Entry.Payload?.FirstMip != null && s_Entry.AssetNameHash != 0 && !s_Seen.Add(s_Entry.AssetNameHash))
+                yield return new ChunkEntry.ChunkMetaEntry { AssetNameHash = 0 };
+            else
+                yield return s_Entry;
+        }
     }
 
     private static ChunkEntry.ChunkMetaEntry ChunkMeta(IChunkObject p_Object)
